@@ -1,65 +1,322 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import React, { useState, useCallback } from 'react';
+import Header from '@/components/Header';
+import CourseHeader from '@/components/CourseHeader';
+import TabNavigation from '@/components/TabNavigation';
+import ModuleList from '@/components/ModuleList';
+import VideoPlayer from '@/components/VideoPlayer';
+import QuizModal from '@/components/QuizModal';
+import ProgressSidebar from '@/components/ProgressSidebar';
+import QubitsSection from '@/components/QubitsSection';
+import ResourcesSection from '@/components/ResourcesSection';
+import SupportSection from '@/components/SupportSection';
+import CertificateSection from '@/components/CertificateSection';
+import {
+  learnerProfile,
+  course,
+  modules as initialModules,
+  learnerProgress,
+  qubitsModules,
+  qubitsDashboard,
+  trainer,
+  resources,
+  notifications,
+} from '@/data/mockData';
+import type { TabId, Lesson, Module, Quiz } from '@/types';
+
+export default function LearnerDashboard() {
+  const [activeTab, setActiveTab] = useState<TabId>('course');
+  const [modules, setModules] = useState(initialModules);
+  const [progress, setProgress] = useState(learnerProgress);
+
+  // Video player state
+  const [currentLesson, setCurrentLesson] = useState<Lesson | null>(null);
+  const [currentModule, setCurrentModule] = useState<Module | null>(null);
+  const [isVideoOpen, setIsVideoOpen] = useState(false);
+
+  // Quiz state
+  const [currentQuiz, setCurrentQuiz] = useState<Quiz | null>(null);
+  const [quizModuleTitle, setQuizModuleTitle] = useState('');
+  const [isQuizOpen, setIsQuizOpen] = useState(false);
+
+  // Find lesson and module by ID
+  const findLessonAndModule = useCallback(
+    (lessonId: string, moduleId: string) => {
+      const module = modules.find((m) => m.id === moduleId);
+      const lesson = module?.lessons.find((l) => l.id === lessonId);
+      return { module, lesson };
+    },
+    [modules]
+  );
+
+  // Handle play lesson
+  const handlePlayLesson = useCallback(
+    (lessonId: string, moduleId: string) => {
+      const { module, lesson } = findLessonAndModule(lessonId, moduleId);
+      if (lesson && module) {
+        setCurrentLesson(lesson);
+        setCurrentModule(module);
+        setIsVideoOpen(true);
+      }
+    },
+    [findLessonAndModule]
+  );
+
+  // Handle start quiz
+  const handleStartQuiz = useCallback(
+    (quizId: string, moduleId: string) => {
+      const module = modules.find((m) => m.id === moduleId);
+      if (module) {
+        setCurrentQuiz(module.quiz);
+        setQuizModuleTitle(`Module ${module.number}: ${module.title}`);
+        setIsQuizOpen(true);
+      }
+    },
+    [modules]
+  );
+
+  // Handle video close
+  const handleCloseVideo = useCallback(() => {
+    setIsVideoOpen(false);
+    setCurrentLesson(null);
+    setCurrentModule(null);
+  }, []);
+
+  // Handle lesson complete
+  const handleLessonComplete = useCallback(
+    (lessonId: string) => {
+      setModules((prev) =>
+        prev.map((module) => ({
+          ...module,
+          lessons: module.lessons.map((lesson) =>
+            lesson.id === lessonId
+              ? { ...lesson, status: 'completed' as const, progress: 100 }
+              : lesson
+          ),
+          progress: Math.round(
+            (module.lessons.filter(
+              (l) => l.id === lessonId || l.status === 'completed'
+            ).length /
+              module.lessons.length) *
+              100
+          ),
+        }))
+      );
+
+      setProgress((prev) => ({
+        ...prev,
+        lessonsCompleted: prev.lessonsCompleted + 1,
+        overallProgress: Math.round(
+          ((prev.lessonsCompleted + 1) / prev.totalLessons) * 100
+        ),
+      }));
+    },
+    []
+  );
+
+  // Handle video progress update
+  const handleProgressUpdate = useCallback(
+    (lessonId: string, progressValue: number, position: number) => {
+      setModules((prev) =>
+        prev.map((module) => ({
+          ...module,
+          lessons: module.lessons.map((lesson) =>
+            lesson.id === lessonId
+              ? {
+                  ...lesson,
+                  progress: progressValue,
+                  lastPosition: position,
+                  status: progressValue > 0 ? 'in_progress' : lesson.status,
+                }
+              : lesson
+          ),
+        }))
+      );
+    },
+    []
+  );
+
+  // Handle next lesson
+  const handleNextLesson = useCallback(() => {
+    if (!currentModule || !currentLesson) return;
+
+    const currentIndex = currentModule.lessons.findIndex(
+      (l) => l.id === currentLesson.id
+    );
+    const nextLesson = currentModule.lessons[currentIndex + 1];
+
+    if (nextLesson) {
+      setCurrentLesson(nextLesson);
+    } else {
+      // No more lessons in module, close video
+      handleCloseVideo();
+    }
+  }, [currentModule, currentLesson, handleCloseVideo]);
+
+  // Handle quiz close
+  const handleCloseQuiz = useCallback(() => {
+    setIsQuizOpen(false);
+    setCurrentQuiz(null);
+  }, []);
+
+  // Handle quiz submit
+  const handleQuizSubmit = useCallback(
+    (score: number, answers: Record<string, string[]>) => {
+      const passed = score >= (currentQuiz?.passingScore || 70);
+
+      setModules((prev) =>
+        prev.map((module) => {
+          if (module.quiz.id === currentQuiz?.id) {
+            return {
+              ...module,
+              quiz: {
+                ...module.quiz,
+                status: passed ? 'passed' : 'failed',
+                bestScore: Math.max(module.quiz.bestScore || 0, score),
+              },
+              status: passed && module.progress === 100 ? 'completed' : module.status,
+            };
+          }
+          return module;
+        })
+      );
+
+      if (passed) {
+        setProgress((prev) => ({
+          ...prev,
+          quizzesPassed: prev.quizzesPassed + 1,
+          questionsAttempted:
+            prev.questionsAttempted + (currentQuiz?.questions.length || 0),
+          questionsCorrect:
+            prev.questionsCorrect +
+            Math.round(((currentQuiz?.questions.length || 0) * score) / 100),
+          averageScore: Math.round(
+            (prev.averageScore * prev.quizzesPassed + score) /
+              (prev.quizzesPassed + 1)
+          ),
+        }));
+      }
+    },
+    [currentQuiz]
+  );
+
+  // Handle review video from quiz
+  const handleReviewVideo = useCallback(() => {
+    handleCloseQuiz();
+    // Find the module for the quiz and play the first lesson
+    const module = modules.find((m) => m.quiz.id === currentQuiz?.id);
+    if (module && module.lessons[0]) {
+      handlePlayLesson(module.lessons[0].id, module.id);
+    }
+  }, [modules, currentQuiz, handleCloseQuiz, handlePlayLesson]);
+
+  // Handle Qubits start test
+  const handleQubitsStartTest = useCallback(
+    (moduleIds: string[], questionCount: number) => {
+      console.log('Starting Qubits test:', moduleIds, questionCount);
+      // In a real app, this would open a practice test modal
+    },
+    []
+  );
+
+  // Handle Qubits reset
+  const handleQubitsReset = useCallback(() => {
+    console.log('Resetting Qubits progress');
+    // In a real app, this would reset the practice test progress
+  }, []);
+
+  // Render tab content
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'course':
+        return (
+          <ModuleList
+            modules={modules}
+            onPlayLesson={handlePlayLesson}
+            onStartQuiz={handleStartQuiz}
+          />
+        );
+      case 'qubits':
+        return (
+          <QubitsSection
+            modules={qubitsModules}
+            dashboard={qubitsDashboard}
+            onStartTest={handleQubitsStartTest}
+            onReset={handleQubitsReset}
+          />
+        );
+      case 'resources':
+        return <ResourcesSection resources={resources} />;
+      case 'support':
+        return <SupportSection trainer={trainer} />;
+      case 'certificate':
+        return (
+          <CertificateSection
+            progress={progress}
+            course={course}
+            learner={learnerProfile}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="min-h-screen bg-gray-50">
+      <Header learner={learnerProfile} notifications={notifications} />
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <CourseHeader course={course} progress={progress} />
+
+        <TabNavigation
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          certificateEarned={progress.certificateEarned}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Main Content */}
+          <div className="lg:col-span-3">{renderTabContent()}</div>
+
+          {/* Sidebar */}
+          <div className="lg:col-span-1">
+            <ProgressSidebar progress={progress} qubitsDashboard={qubitsDashboard} />
+          </div>
         </div>
       </main>
+
+      {/* Video Player Modal */}
+      {isVideoOpen && currentLesson && currentModule && (
+        <VideoPlayer
+          isOpen={isVideoOpen}
+          onClose={handleCloseVideo}
+          lesson={currentLesson}
+          module={currentModule}
+          courseName={course.name}
+          onComplete={handleLessonComplete}
+          onProgressUpdate={handleProgressUpdate}
+          onNextLesson={
+            currentModule.lessons.findIndex((l) => l.id === currentLesson.id) <
+            currentModule.lessons.length - 1
+              ? handleNextLesson
+              : undefined
+          }
+        />
+      )}
+
+      {/* Quiz Modal */}
+      {isQuizOpen && currentQuiz && (
+        <QuizModal
+          isOpen={isQuizOpen}
+          onClose={handleCloseQuiz}
+          quiz={currentQuiz}
+          moduleTitle={quizModuleTitle}
+          onSubmit={handleQuizSubmit}
+          onReviewVideo={handleReviewVideo}
+        />
+      )}
     </div>
   );
 }
